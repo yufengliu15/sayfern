@@ -1,6 +1,6 @@
 # Packaging and releases
 
-Sayfern ships as a macOS `.dmg`, a Windows `.exe` and a Linux Flatpak. GitHub Actions builds all of them on every push to `main`.
+Sayfern ships as a macOS `.dmg`, a Windows `.exe` and a Linux Flatpak. GitHub Actions builds all of them when a push to `main` carries a new version.
 
 ## What CI does
 
@@ -8,15 +8,15 @@ The workflow is [`.github/workflows/release.yml`](../.github/workflows/release.y
 
 | Job | Runner | Output |
 |---|---|---|
-| `check` | ubuntu-latest | `npm run typecheck`, `npm test`. The other jobs wait for it. |
+| `check` | ubuntu-latest | `npm run typecheck`, `npm test`, and whether `v<version>` is already released. The other jobs wait for it. |
 | `package` | macos-latest | `Sayfern-<version>-mac-arm64.dmg` (Apple silicon) |
 | `package` | macos-15-intel | `Sayfern-<version>-mac-x64.dmg` (Intel) |
 | `package` | windows-latest | `Sayfern-<version>-win-x64.exe` (NSIS installer) |
 | `package` | ubuntu-latest | `Sayfern-<version>-linux-x64.tar.gz`, plus the `flatpak-source` and `flathub-submission` folders |
 | `flatpak` | ubuntu-latest, Flatpak container | `Sayfern-<version>-linux-x86_64.flatpak` |
-| `release` | ubuntu-latest | A GitHub release `v<version>`, only if that release does not exist yet |
+| `release` | ubuntu-latest | A GitHub release `v<version>` |
 
-Every run keeps its files as workflow artifacts. A release needs a new version in `package.json` (AGENTS.md rule 10) and a `## [<version>] - <date>` section in `CHANGELOG.md`. The release notes are that section, after the install note in [`.github/release-note.md`](../.github/release-note.md). Only the newest release shows the install note: the workflow removes it from the release before (everything between the two `release-note` comments). The note is at the top of the releases page, so people who download see it once.
+`package`, `flatpak` and `release` run only when `v<version>` is not released yet; other pushes run `check` alone. This keeps workflow artifacts inside the account's free Actions storage (500 MB on GitHub Free, 2 GB on Pro), which a full set of installers on every push overran. Artifacts are kept 1 day, except `flathub-submission` (7 days, a few small files). To build installers for an already released version, run the workflow by hand (Actions > Build and release > Run workflow) with "Build installers" ticked; that run builds but does not publish. A release needs a new version in `package.json` (AGENTS.md rule 10) and a `## [<version>] - <date>` section in `CHANGELOG.md`. The release notes are that section, after the install note in [`.github/release-note.md`](../.github/release-note.md). Only the newest release shows the install note: the workflow removes it from the release before (everything between the two `release-note` comments). The note is at the top of the releases page, so people who download see it once.
 
 Each OS and CPU builds on its own machine, because `pdfjs-dist` needs the native `@napi-rs/canvas` package for that OS and CPU.
 

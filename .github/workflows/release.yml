@@ -1,8 +1,9 @@
-# Builds the installers on every push to main: macOS .dmg (Apple silicon and Intel), Windows .exe,
-# Linux .tar.gz and a .flatpak bundle, plus the files for the Flathub repo.
-# Every run keeps them as workflow artifacts. When package.json has a version with no v<version>
-# release yet, the run also publishes a GitHub release with them (notes from CHANGELOG.md).
-# Details: docs/packaging.md.
+# Every push to main runs typecheck and tests. When package.json has a version with no v<version>
+# release yet, the run also builds the installers (macOS .dmg for Apple silicon and Intel, Windows .exe,
+# Linux .tar.gz, a .flatpak bundle and the files for the Flathub repo) and publishes a GitHub release
+# with them (notes from CHANGELOG.md). Other pushes build nothing, so artifacts don't fill the
+# account's Actions storage. To build installers without a new version, run the workflow by hand
+# with "Build installers" ticked. Details: docs/packaging.md.
 name: Build and release
 
 on:
@@ -12,6 +13,11 @@ on:
       - "site/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
+    inputs:
+      build:
+        description: Build installers even if this version is already released
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -25,6 +31,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      released: ${{ steps.released.outputs.released }}
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,12 +42,22 @@ jobs:
           cache: npm
       - id: version
         run: echo "version=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
+      - id: released
+        name: Is this version already released?
+        run: |
+          if gh release view "v${{ steps.version.outputs.version }}" > /dev/null 2>&1; then
+            echo "v${{ steps.version.outputs.version }} is already released: no installers built."
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          fi
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
 
   package:
     needs: check
+    if: needs.check.outputs.released != 'true' || inputs.build
     strategy:
       fail-fast: false
       matrix:
@@ -78,7 +97,7 @@ jobs:
         with:
           name: flatpak-source
           path: dist/flatpak/
-          retention-days: 7
+          retention-days: 1
       - if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
@@ -88,6 +107,7 @@ jobs:
 
   flatpak:
     needs: [check, package]
+    if: needs.check.outputs.released != 'true' || inputs.build
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-26.08
@@ -112,6 +132,7 @@ jobs:
 
   release:
     needs: [check, package, flatpak]
+    if: needs.check.outputs.released != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -120,28 +141,16 @@ jobs:
       VERSION: ${{ needs.check.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - name: Skip if this version is already released
-        id: new
-        run: |
-          if gh release view "v$VERSION" > /dev/null 2>&1; then
-            echo "v$VERSION is already released; the installers stay on this run only."
-            echo "new=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "new=true" >> "$GITHUB_OUTPUT"
-          fi
-      - if: steps.new.outputs.new == 'true'
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           pattern: package-*
           path: artifacts
           merge-multiple: true
-      - if: steps.new.outputs.new == 'true'
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: flatpak
           path: artifacts
-      - if: steps.new.outputs.new == 'true'
-        name: Publish the release
+      - name: Publish the release
         run: |
           # The latest release before this one; it loses the install note below.
           previous=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
